@@ -1,0 +1,233 @@
+package com.treata.treataapp
+
+import android.bluetooth.*
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
+import android.content.Context
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.ParcelUuid
+import android.util.Log
+import androidx.annotation.RequiresApi
+import java.util.*
+import kotlin.collections.ArrayList
+
+
+interface BluetoothCallback {
+    fun didConnect()
+    fun didDisconnect()
+    fun dataDidReceive(messageCode: String?, messageValue: ArrayList<String>?)
+}
+
+
+class TransferUUID(
+    private val serviceUUID: Array<String>,
+    private val characteristicUUID: Array<String>
+) {
+    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+    fun getScanFilters(): MutableList<ScanFilter> {
+        val scanFilters = mutableListOf<ScanFilter>()
+
+        for (service in serviceUUID) {
+            val uuid = ParcelUuid(UUID.fromString(service))
+            val filter = ScanFilter.Builder().setServiceUuid(uuid).build()
+            scanFilters += filter
+        }
+
+        return scanFilters
+    }
+
+    fun getServices(): Array<UUID> {
+        var uuidArray = arrayOf<UUID>()
+
+        for (service in serviceUUID) {
+            uuidArray += UUID.fromString(service)
+        }
+
+        return uuidArray
+    }
+
+    fun getCharacteristics(): Array<UUID> {
+        var uuidArray = arrayOf<UUID>()
+
+        for (characteristic in characteristicUUID) {
+            uuidArray += UUID.fromString(characteristic)
+        }
+
+        return uuidArray
+    }
+}
+
+@RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+class BluetoothCentralManager(
+    private val context: Context,
+    private val uuid: TransferUUID,
+    private val callback: BluetoothCallback
+) {
+
+    private var receivingMassage: Boolean = false //code for temp
+    private var messageCode: String? = null
+    private var messageValue: String? = null
+    var counter: Int = 0
+    var once: Boolean = true
+    var once_2: Boolean = true
+    val array = ArrayList<String>()
+
+    private var connectionState = STATE_DISCONNECTED
+    private var mScanning = false
+    private var bluetoothGatt: BluetoothGatt? = null
+
+
+    private val leScanCallback: ScanCallback = @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+    object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            super.onScanResult(callbackType, result)
+            Log.d("onScanResult", "Device Found")
+            bluetoothGatt = result.device.connectGatt(
+                context,
+                true,
+                gattCallback
+            )
+        }
+    }
+
+    init {
+        scanLeDevice()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+    fun scanLeDevice() {
+        val bluetoothLeScanner = BluetoothAdapter.getDefaultAdapter().bluetoothLeScanner
+
+        val scanSettings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+
+        if (!mScanning) {
+            mScanning = false
+            bluetoothLeScanner.stopScan(leScanCallback)
+            mScanning = true
+            bluetoothLeScanner.startScan(uuid.getScanFilters(), scanSettings, leScanCallback)
+        } else {
+            mScanning = false
+            bluetoothLeScanner.stopScan(leScanCallback)
+        }
+    }
+
+    // Various callback methods defined by the BLE API.
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(
+            gatt: BluetoothGatt,
+            status: Int,
+            newState: Int
+        ) {
+            val intentAction: String
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> {
+                    intentAction = ACTION_GATT_CONNECTED
+                    connectionState = STATE_CONNECTED
+                    Log.i("onConnectionStateChange", "Connected to GATT server.")
+                    Log.i(
+                        "onConnectionStateChange",
+                        "Attempting to start service discovery: " +
+                                gatt.discoverServices()
+                    )
+                }
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    intentAction = ACTION_GATT_DISCONNECTED
+                    connectionState = STATE_DISCONNECTED
+                    Log.i("onConnectionStateChange", "Disconnected from GATT server.")
+                }
+            }
+        }
+
+        // New services discovered
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+
+            for (discoveredService in gatt.services) {
+                for (service in uuid.getServices()) {
+                    if (discoveredService.uuid == service) {
+                        Log.d("onServicesDiscovered", "Service =" + discoveredService.uuid)
+                        for (charUUID in uuid.getCharacteristics()) {
+                            val char = discoveredService.getCharacteristic(charUUID)
+                            gatt.setCharacteristicNotification(char, true)
+                            gatt.readCharacteristic(char)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Result of a characteristic read operation
+        override fun onCharacteristicRead(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            Log.i("onCharacteristicRead", "characteristic" + characteristic.uuid)
+            Log.i("onCharacteristicRead", "value" + characteristic.value)
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            val handler = Handler(Looper.getMainLooper())
+            Log.i("array", "array" + characteristic.value)
+
+            handler.post(Runnable {
+
+                counter += 1
+                Log.e("counter size", "counter: $counter")
+                val data = String(characteristic.value)
+                if (data.contains(":") && once) {
+                    array.add(data)
+                    Log.e("myArray", "$data " )
+                    once = false
+                }
+
+                Log.e("messageValueE", "onCharacteristicChanged: $data")
+
+                if (receivingMassage && array.size > 0 && once_2) {
+                    once_2 = false
+                    messageValue = data
+                    Log.e("eeeeee", "onCharacteristicChanged")
+                    callback.dataDidReceive(messageCode, array)
+
+                    once_2 = true
+                    array.clear()
+                    counter = 0
+                    receivingMassage = false
+                    once = true
+
+                }
+
+                if (data.equals("505")) {
+                    receivingMassage = true
+                    messageCode = "505"
+                }
+
+
+            })
+
+
+        }
+    }
+
+    private companion object {
+        private const val STATE_DISCONNECTED = 0
+        private const val STATE_CONNECTING = 1
+        private const val STATE_CONNECTED = 2
+        const val ACTION_GATT_CONNECTED = "com.example.bluetooth.le.ACTION_GATT_CONNECTED"
+        const val ACTION_GATT_DISCONNECTED =
+            "com.example.bluetooth.le.ACTION_GATT_DISCONNECTED"
+        const val ACTION_GATT_SERVICES_DISCOVERED =
+            "com.example.bluetooth.le.ACTION_GATT_SERVICES_DISCOVERED"
+        const val ACTION_DATA_AVAILABLE = "com.example.bluetooth.le.ACTION_DATA_AVAILABLE"
+        const val EXTRA_DATA = "com.example.bluetooth.le.EXTRA_DATA"
+    }
+}
+

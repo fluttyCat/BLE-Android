@@ -1,0 +1,207 @@
+package com.treata.treataapp.ui.fragments
+
+import android.bluetooth.BluetoothAdapter
+import android.content.ContentValues.TAG
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.view.View
+import android.widget.Toast
+import androidx.annotation.RequiresApi
+import androidx.coordinatorlayout.widget.CoordinatorLayout
+import androidx.fragment.app.Fragment
+import com.google.android.material.bottomsheet.BottomSheetBehavior
+import com.treata.treataapp.BluetoothCallback
+import com.treata.treataapp.BluetoothCentralManager
+import com.treata.treataapp.R
+import com.treata.treataapp.TransferUUID
+import com.treata.treataapp.models.GetTempMsg
+import kotlinx.android.synthetic.main.fragment_temperature.*
+
+
+class TempFragment : Fragment(R.layout.fragment_temperature), onBottomSheetListener {
+
+
+    companion object {
+        @JvmStatic
+        var isFirst = true
+        var REQUEST_ENABLE_BT = 1
+        var counterr = 0
+    }
+
+    var onListener: onBottomSheetListener? = null
+
+    private var sheetBehavior: BottomSheetBehavior<*>? = null
+    private var bottom_sheet: CoordinatorLayout? = null
+    var canOpenbottomSheet: Boolean = true
+
+
+    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        onListener = this
+
+        val activity = activity as Context
+        fun PackageManager.missingSystemFeature(name: String): Boolean = !hasSystemFeature(name)
+        var bluetoothCentralManager: BluetoothCentralManager? = null
+        val mhandler: Handler = Handler()
+
+
+        val centralCallback: BluetoothCallback = object : BluetoothCallback {
+            override fun didConnect() {
+            }
+
+            override fun didDisconnect() {
+
+            }
+
+            override fun dataDidReceive(messageCode: String?, messageValue: ArrayList<String>?) {
+
+                Log.e("dataDidReceiveee", "dataDidReceive: " )
+                val mhandler = Handler(Looper.getMainLooper())
+                mhandler.post(Runnable {
+                    if (isFirst) {
+                        isFirst = false
+                        val getTempMsg = GetTempMsg(sticky_switch.isEnabled, false)
+
+                        Log.e("wwwwww", "wwwwwww: ${messageValue?.size}")
+
+                        for (item in messageValue!!) {
+                            Log.e("itemofmessageValue", "item: $item ")
+                        }
+
+                        counterr += 1
+                        Log.i("dataDidReceive", "value (string) $counterr")
+
+                        if (counterr == 1) {
+
+                            onListener?.onBottomSheetCall(messageValue!!, getTempMsg)
+
+                        }
+                    }
+                })
+
+            }
+
+
+        }
+
+
+        requireContext().packageManager.takeIf { it.missingSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE) }
+            ?.also {
+                Toast.makeText(activity, R.string.ble_not_supported, Toast.LENGTH_SHORT).show()
+                // TODO handleBLE(ghader)
+            }
+
+        val mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+        if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled) {
+//            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+//            startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT)
+            mBluetoothAdapter.enable()
+        }
+
+
+        val transferUUID = TransferUUID(
+            arrayOf("0000ffe0-0000-1000-8000-00805f9b34fb"),
+            arrayOf("0000ffe1-0000-1000-8000-00805f9b34fb")
+        )
+
+
+            bluetoothCentralManager =
+                BluetoothCentralManager(activity, transferUUID, centralCallback)
+
+
+    }
+
+    fun castTemperatureNumber(temp: String): String {
+        val url = arrayOfNulls<String>(2)
+        val arr: List<String> = temp.split(":")
+        if (arr.isNotEmpty()) {
+            url[1] = arr[1]
+        }
+
+        val url2 = FloatArray(2)
+        val arr2: List<String> = url[1]!!.split("c")
+        if (arr2.isNotEmpty()) {
+            url2[0] = arr2[0].toFloat()
+        } else
+            url2[0] = 0f
+
+
+        return url2[0].toString()
+    }
+
+    fun openBottomSheet(data: String, getTempMsg: GetTempMsg) {
+
+        //val bottomsheet = BottomSheetDialog(data,getTempMsg)
+//        bottomsheet.show(childFragmentManager,"tempResult")
+
+
+        val fragment: Fragment? = activity?.supportFragmentManager?.findFragmentByTag("tempResult")
+        if (fragment != null) {
+            Log.e(TAG, "openBottomSheet8521458665653683653632: ")
+            activity?.supportFragmentManager?.beginTransaction()?.remove(fragment)
+                ?.commit()
+        }
+
+        Log.e(TAG, "openBottomSheet: ")
+        val frag2 = BottomSheetDialog(data, getTempMsg)
+        activity?.supportFragmentManager?.beginTransaction()?.replace(
+            R.id.bottom_sheet_drawer,
+            frag2
+        )
+            ?.commit()
+
+    }
+
+    override fun onBottomSheetCall(data: ArrayList<String>, getTempMsg: GetTempMsg) {
+        var correctData: String? = null
+
+        Log.e("yyyyyy", "yyyyyy: ${data.size}")
+        for (item in data){
+            if(item.contains(":"))
+                correctData = item
+        }
+
+        if (correctData != null){
+            isFirst = true
+            fragmentManager?.beginTransaction()?.add(
+                BottomSheetDialog(correctData, getTempMsg), ""
+            )
+                ?.commit()
+        }else{
+            isFirst = true
+            fragmentManager?.beginTransaction()?.add(
+                BottomSheetDialog("مجدد تلاش کنید", getTempMsg), ""
+            )
+                ?.commit()
+        }
+
+
+
+    }
+
+
+}
+
+interface onBottomSheetListener {
+    //fun onBottomSheetCall(data: String, getTempMsg: GetTempMsg)
+    fun onBottomSheetCall(data: ArrayList<String>, getTempMsg: GetTempMsg)
+}
+
+
+//                Log.i("dataDidReceive", "value (string) $messageValue")
+////                Log.i("dataDidReceive", "Code (string) $messageCode")
+//                //mhandler.post(Runnable { tempText.text = messageValue })
+//
+//                if (messageCode.equals("505")) {val getTempMsg = GetTempMsg(sticky_switch.isEnabled, false)
+//                    openBottomSheet(castTemperatureNumber(messageValue!!), getTempMsg)
+//                    //counter = castTemperatureNumber(messageValue).toFloat()
+//                    Log.e("counter", counter.toString())
+//                    Log.e("castTemperatureNumber", castTemperatureNumber(messageValue))}
+
